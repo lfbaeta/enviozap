@@ -11,9 +11,15 @@ const TEMPLATE_KEYS=['initial','presentation','promotion','followup','trial'];
 function validConfig(config){return config&&typeof config.offer==='string'&&config.offer.trim()&&config.offer.length<=4000&&typeof config.tone==='string'&&config.tone.length<=100&&typeof config.length==='string'&&config.length.length<=50&&typeof config.emojis==='boolean'&&TEMPLATE_KEYS.every(k=>typeof config.templates?.[k]==='string'&&config.templates[k].length<=10000)}
 async function requestData(request,max=75000){const raw=await request.text();if(raw.length>max)throw new Error('INPUT_TOO_LARGE');return JSON.parse(raw)}
 async function handleStorage(request,env,url){
- if(!['/api/settings','/api/history'].includes(url.pathname)&&!url.pathname.startsWith('/api/history/'))return null;
+ if(!['/api/settings','/api/settings/key','/api/history'].includes(url.pathname)&&!url.pathname.startsWith('/api/history/'))return null;
  if(request.method!=='GET'&&request.headers.get('Origin')!==url.origin)return json({error:'Origem não autorizada.'},403);
  try{
+  if(url.pathname==='/api/settings/key'){
+   if(request.method!=='PUT')return json({error:'Método não permitido.'},405);
+   const data=await requestData(request,2500);const key=normalizeApiKey(data?.apiKey);if(!key||key.length>512)return json({error:'Insira a chave Gemini antes de salvar.'},400);
+   const row=await savedSettings(env);if(!row)return json({error:'Aguarde as configurações carregarem e tente novamente.'},409);
+   await statement(env,'UPDATE settings SET key_cipher = ?, updated_at = ? WHERE id = ?',await encryptSecret(key,env),new Date().toISOString(),1).run();return json({hasApiKey:true})
+  }
   if(url.pathname==='/api/settings'){
    if(request.method==='GET'){const row=await savedSettings(env);return json({config:row?JSON.parse(row.config_json):null,hasApiKey:!!(row?.key_cipher||env.GEMINI_API_KEY)})}
    if(request.method!=='PUT')return json({error:'Método não permitido.'},405);

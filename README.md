@@ -18,7 +18,7 @@ Cinco modelos da Delivale: inicial, apresentação, promoção, retorno e convit
 ## Configurações e banco
 O Site usa D1 (binding DB), com schema em db/schema.ts e migrações Drizzle em drizzle/. Configurações, oferta, modelos e envios são persistidos no servidor. A chave Gemini é criptografada com AES-GCM; SETTINGS_ENCRYPTION_KEY fica como segredo de produção, nunca no GitHub. A interface só informa se existe uma chave, sem devolvê-la.
 
-Em Configurações, clique em Salvar configurações para guardar as opções e a chave. Campo de chave vazio mantém a anterior; Remover chave salva marca a exclusão para a próxima gravação.
+Em Configurações, o botão Salvar chave API guarda somente a chave no banco, sem alterar as opções ou modelos. Salvar configurações guarda as opções e também aceita a chave preenchida. Campo de chave vazio mantém a anterior; Remover chave salva marca a exclusão para a próxima gravação.
 
 ## Mesmo banco no AI Studio
 server.mjs encaminha as rotas /api ao Site definido por SITE_BACKEND_URL. O padrão aponta ao Site EnvioZap já publicado, portanto AI Studio e Site usam o mesmo banco, sem login. O servidor Node não cria um segundo banco local. Não copie SETTINGS_ENCRYPTION_KEY para o AI Studio: somente o Site precisa desse segredo.
