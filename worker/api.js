@@ -5,10 +5,12 @@ export default {
   const url=new URL(request.url);
   if(url.pathname==='/favicon.svg')return new Response(icon,{headers:{'Content-Type':'image/svg+xml'}});
   if(url.pathname==='/')return new Response(page,{headers:{'Content-Type':'text/html; charset=utf-8'}});
+  const storage=await handleStorage(request,env,url);if(storage)return storage;
   if(url.pathname!=='/api/generate-message')return new Response('Not found',{status:404});
   if(request.method!=='POST')return json({error:'Método não permitido.'},405);
   if(request.headers.get('Origin')!==url.origin)return json({error:'Origem não autorizada.'},403);
-  const apiKey=normalizeApiKey(request.headers.get('X-Gemini-Key')||env.GEMINI_API_KEY);
+  let savedKey='';try{savedKey=await configuredApiKey(env)}catch{return json({error:'Não foi possível carregar a chave do banco de dados. Tente novamente.'},503)}
+  const apiKey=normalizeApiKey(request.headers.get('X-Gemini-Key')||savedKey);
   if(!apiKey)return json({error:'Insira sua chave da API Gemini no campo acima para criar a mensagem.'},503);
   if(apiKey.length>512)return json({error:'O conteúdo inserido é longo demais para uma chave. Copie a chave da API Gemini, não o código de exemplo.'},400);
   try{

@@ -4,9 +4,9 @@ A fonte da interface é worker/page.html; a API Gemini está em worker/api.js. n
 
 O foco é apresentar a Delivale.com: cinco mensagens prontas e editáveis, oferta O que você quer oferecer?, IA e chave em Configurações. A tela inicial deve permanecer simples. A IA usa a oferta como fonte principal dos fatos. Não invente preço, benefício ou cobertura de entregas.
 
-A aba Envios registra empresa, telefone, data e mensagem quando a conversa é aberta e permite confirmar o envio manualmente. Não afirme que o WhatsApp confirmou automaticamente o envio. O histórico usa armazenamento local do navegador.
+A aba Envios registra empresa, telefone, data e mensagem quando a conversa é aberta e permite confirmar o envio manualmente. Não afirme que o WhatsApp confirmou automaticamente o envio. O histórico e configurações usam o banco compartilhado no Site. O servidor Node encaminha /api ao SITE_BACKEND_URL, já definido, para usar o mesmo banco. Não troque por localStorage nem crie outro banco.
 
-A chave Gemini é fornecida no campo oculto, enviada ao backend por HTTPS em produção no cabeçalho X-Gemini-Key e nunca salva no localStorage, histórico, logs ou GitHub. Sem chave, os modelos prontos e links continuam funcionando.
+A chave Gemini é fornecida no campo oculto, enviada ao backend por HTTPS em produção no cabeçalho X-Gemini-Key e salva criptografada somente no banco do Site, nunca em localStorage, histórico, logs ou GitHub. A interface não recebe de volta a chave salva. Sem chave, os modelos prontos e links continuam funcionando.
 
 Não incluir fila, Evolution API ou envios automáticos sem nova solicitação. Preserve o fluxo de links com telefone e mensagem completos.
 
