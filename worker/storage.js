@@ -10,10 +10,53 @@ async function configuredApiKey(env){const row=await savedSettings(env);return r
 const TEMPLATE_KEYS=['initial','presentation','promotion','followup','trial'];
 function validConfig(config){return config&&typeof config.offer==='string'&&config.offer.trim()&&config.offer.length<=4000&&typeof config.tone==='string'&&config.tone.length<=100&&typeof config.length==='string'&&config.length.length<=50&&typeof config.emojis==='boolean'&&TEMPLATE_KEYS.every(k=>typeof config.templates?.[k]==='string'&&config.templates[k].length<=10000)}
 async function requestData(request,max=75000){const raw=await request.text();if(raw.length>max)throw new Error('INPUT_TOO_LARGE');return JSON.parse(raw)}
+function cleanPhone(v){let d=String(v||'').replace(/\D/g,'');if(d.length===10||d.length===11)d='55'+d;return d}
+function cleanText(v,max=200){return String(v||'').trim().slice(0,max)}
+async function event(env,contactId,name,details=''){await statement(env,'INSERT INTO contact_events(id,contact_id,event,details,created_at) VALUES(?,?,?,?,?)',crypto.randomUUID(),contactId,name,details,new Date().toISOString()).run()}
 async function handleStorage(request,env,url){
- if(!['/api/settings','/api/settings/key','/api/history'].includes(url.pathname)&&!url.pathname.startsWith('/api/history/'))return null;
+ const central=url.pathname.startsWith('/api/contacts')||url.pathname.startsWith('/api/queue')||url.pathname==='/api/dashboard'||url.pathname==='/api/send-rules'||url.pathname.startsWith('/api/instances');
+ if(!central&&!['/api/settings','/api/settings/key','/api/history'].includes(url.pathname)&&!url.pathname.startsWith('/api/history/'))return null;
  if(request.method!=='GET'&&request.headers.get('Origin')!==url.origin)return json({error:'Origem não autorizada.'},403);
  try{
+  if(url.pathname==='/api/dashboard'&&request.method==='GET'){
+   const [agenda,queued,sent,interested,errors]=await Promise.all([
+    statement(env,"SELECT COUNT(*) n FROM contacts WHERE status='AGENDA'").first(),
+    statement(env,"SELECT COUNT(*) n FROM send_queue WHERE status IN ('QUEUED','PROCESSING')").first(),
+    statement(env,"SELECT COUNT(*) n FROM contacts WHERE status='SENT' OR status='INTERESTED'").first(),
+    statement(env,"SELECT COUNT(*) n FROM contacts WHERE interested=1").first(),
+    statement(env,"SELECT COUNT(*) n FROM send_queue WHERE status='ERROR'").first()
+   ]);return json({agenda:agenda?.n||0,queued:queued?.n||0,sent:sent?.n||0,interested:interested?.n||0,errors:errors?.n||0})
+  }
+  if(url.pathname==='/api/contacts'&&request.method==='GET'){
+   const city=cleanText(url.searchParams.get('city')||'',120),status=cleanText(url.searchParams.get('status')||'',30),q=cleanText(url.searchParams.get('q')||'',150);
+   let sql='SELECT * FROM contacts WHERE 1=1',args=[];if(city){sql+=' AND city=?';args.push(city)}if(status){sql+=' AND status=?';args.push(status)}if(q){sql+=' AND (company LIKE ? OR phone LIKE ? OR city LIKE ?)';args.push('%'+q+'%','%'+q+'%','%'+q+'%')}sql+=' ORDER BY company COLLATE NOCASE';
+   const result=await statement(env,sql,...args).all();const cities=await statement(env,'SELECT DISTINCT city FROM contacts ORDER BY city COLLATE NOCASE').all();return json({contacts:result.results||[],cities:(cities.results||[]).map(x=>x.city)})
+  }
+  if(url.pathname==='/api/contacts/import'&&request.method==='POST'){
+   const data=await requestData(request,200000);const city=cleanText(data.city,120);if(!city||!Array.isArray(data.contacts)||!data.contacts.length)return json({error:'Informe a cidade e os contatos.'},400);
+   let imported=0,skipped=0;for(const item of data.contacts.slice(0,5000)){const company=cleanText(item.company||item.name,150),phone=cleanPhone(item.phone||item.whatsapp);if(!company||!/^[0-9]{10,15}$/.test(phone)){skipped++;continue}const id=crypto.randomUUID(),now=new Date().toISOString();const r=await statement(env,'INSERT OR IGNORE INTO contacts(id,company,responsible,phone,city,notes,status,interested,created_at,imported_at) VALUES(?,?,?,?,?,?,?,?,?,?)',id,company,cleanText(item.responsible,150),phone,city,cleanText(item.notes,1000),'AGENDA',0,now,now).run();if(r.meta?.changes){imported++;await event(env,id,'IMPORTED','Cidade: '+city)}else skipped++}return json({success:true,imported,skipped})
+  }
+  if(url.pathname.match(/^\/api\/contacts\/[^/]+$/)&&request.method==='PATCH'){
+   const id=decodeURIComponent(url.pathname.split('/').pop()),data=await requestData(request,10000);const company=cleanText(data.company,150),phone=cleanPhone(data.phone),city=cleanText(data.city,120);if(!company||!city||!/^[0-9]{10,15}$/.test(phone))return json({error:'Confira estabelecimento, WhatsApp e cidade.'},400);
+   const r=await statement(env,'UPDATE contacts SET company=?,responsible=?,phone=?,city=?,notes=? WHERE id=?',company,cleanText(data.responsible,150),phone,city,cleanText(data.notes,1000),id).run();if(r.meta?.changes)await event(env,id,'EDITED');return r.meta?.changes?json({success:true}):json({error:'Contato não encontrado.'},404)
+  }
+  if(url.pathname.match(/^\/api\/contacts\/[^/]+\/interest$/)&&request.method==='PATCH'){
+   const id=decodeURIComponent(url.pathname.split('/')[3]),data=await requestData(request,1000),value=data.interested===true;const r=await statement(env,"UPDATE contacts SET interested=?,status=CASE WHEN ?=1 THEN 'INTERESTED' ELSE CASE WHEN last_sent_at IS NULL THEN 'AGENDA' ELSE 'SENT' END END WHERE id=?",value?1:0,value?1:0,id).run();if(r.meta?.changes)await event(env,id,value?'INTERESTED':'INTEREST_REMOVED');return r.meta?.changes?json({success:true}):json({error:'Contato não encontrado.'},404)
+  }
+  if(url.pathname.match(/^\/api\/contacts\/[^/]+\/return$/)&&request.method==='POST'){
+   const id=decodeURIComponent(url.pathname.split('/')[3]);const r=await statement(env,"UPDATE contacts SET status='AGENDA' WHERE id=?",id).run();if(r.meta?.changes)await event(env,id,'RETURNED_TO_AGENDA');return r.meta?.changes?json({success:true}):json({error:'Contato não encontrado.'},404)
+  }
+  if(url.pathname==='/api/queue'&&request.method==='GET'){const r=await statement(env,"SELECT q.*,c.company,c.phone,c.city,c.interested FROM send_queue q JOIN contacts c ON c.id=q.contact_id WHERE q.status IN ('QUEUED','PROCESSING','ERROR') ORDER BY q.position,q.created_at").all();return json({entries:r.results||[]})}
+  if(url.pathname==='/api/queue'&&request.method==='POST'){
+   const data=await requestData(request,10000),limit=Math.max(1,Math.min(500,Number(data.quantity)||1)),city=cleanText(data.city,120),q=cleanText(data.q,150);let sql="SELECT id,last_sent_at FROM contacts WHERE status='AGENDA'",args=[];if(city){sql+=' AND city=?';args.push(city)}if(q){sql+=' AND (company LIKE ? OR phone LIKE ? OR city LIKE ?)';args.push('%'+q+'%','%'+q+'%','%'+q+'%')}sql+=' ORDER BY company COLLATE NOCASE LIMIT ?';args.push(limit);const contacts=(await statement(env,sql,...args).all()).results||[];let added=0;const pos=await statement(env,'SELECT COALESCE(MAX(position),0) n FROM send_queue').first();let position=Number(pos?.n||0);for(const c of contacts){if(c.last_sent_at&&!data.allowResend)continue;const id=crypto.randomUUID();try{await statement(env,"INSERT INTO send_queue(id,contact_id,status,position,created_at) VALUES(?,?,'QUEUED',?,?)",id,c.id,++position,new Date().toISOString()).run();await statement(env,"UPDATE contacts SET status='QUEUED' WHERE id=?",c.id).run();await event(env,c.id,'QUEUED');added++}catch{}}return json({success:true,added})
+  }
+  if(url.pathname.match(/^\/api\/queue\/[^/]+$/)&&request.method==='DELETE'){const id=decodeURIComponent(url.pathname.split('/').pop());const row=await statement(env,'SELECT contact_id FROM send_queue WHERE id=? AND status=?',id,'QUEUED').first();if(!row)return json({error:'Item não pode ser removido.'},409);await statement(env,'DELETE FROM send_queue WHERE id=?',id).run();await statement(env,"UPDATE contacts SET status='AGENDA' WHERE id=?",row.contact_id).run();await event(env,row.contact_id,'QUEUE_REMOVED');return json({success:true})}
+  if(url.pathname==='/api/send-rules'){
+   if(request.method==='GET'){const r=await statement(env,'SELECT * FROM send_rules WHERE id=1').first();return json({rules:r})}
+   if(request.method==='PUT'){const d=await requestData(request,5000),min=Math.max(1,Number(d.minSeconds)||60),max=Math.max(min,Number(d.maxSeconds)||180),cycle=Math.max(1,Number(d.messagesPerCycle)||10),rest=Math.max(0,Number(d.restMinutes)||20),sw=Math.max(1,Number(d.switchAfter)||10);await statement(env,'UPDATE send_rules SET min_seconds=?,max_seconds=?,messages_per_cycle=?,rest_minutes=?,switch_after=?,updated_at=? WHERE id=1',min,max,cycle,rest,sw,new Date().toISOString()).run();return json({success:true})}
+  }
+  if(url.pathname==='/api/instances'&&request.method==='GET'){const r=await statement(env,'SELECT id,name,status,api_url AS apiUrl,last_checked_at AS lastCheckedAt,rest_until AS restUntil,sent_in_cycle AS sentInCycle FROM instances ORDER BY name').all();return json({instances:r.results||[]})}
+  if(url.pathname==='/api/instances'&&request.method==='POST'){const d=await requestData(request,5000),name=cleanText(d.name,100),apiUrl=cleanText(d.apiUrl,500);if(!name)return json({error:'Informe o nome da instância.'},400);const id=crypto.randomUUID(),now=new Date().toISOString();await statement(env,"INSERT INTO instances(id,name,status,api_url,created_at,updated_at) VALUES(?,?,'DISCONNECTED',?,?,?)",id,name,apiUrl,now,now).run();return json({success:true,id})}
   if(url.pathname==='/api/settings/key'){
    if(request.method!=='PUT')return json({error:'Método não permitido.'},405);
    const data=await requestData(request,2500);const key=normalizeApiKey(data?.apiKey);if(!key||key.length>512)return json({error:'Insira a chave Gemini antes de salvar.'},400);
