@@ -34,3 +34,8 @@ CREATE TABLE IF NOT EXISTS instances (
  id text PRIMARY KEY NOT NULL, name text NOT NULL, status text DEFAULT 'DISCONNECTED' NOT NULL, api_url text, token_cipher text,
  last_checked_at text, rest_until text, sent_in_cycle integer DEFAULT 0 NOT NULL, created_at text NOT NULL, updated_at text NOT NULL
 );
+
+--> statement-breakpoint
+ALTER TABLE instances ADD COLUMN provider text DEFAULT 'EVOLUTION_API';
+--> statement-breakpoint
+ALTER TABLE instances ADD COLUMN instance_token_cipher text;
