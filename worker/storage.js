@@ -18,6 +18,7 @@ async function handleStorage(request,env,url){
  if(!central&&!['/api/settings','/api/settings/key','/api/history'].includes(url.pathname)&&!url.pathname.startsWith('/api/history/'))return null;
  if(request.method!=='GET'&&request.headers.get('Origin')!==url.origin)return json({error:'Origem não autorizada.'},403);
  try{
+  if(central)await statement(env,"INSERT OR IGNORE INTO send_rules(id,updated_at) VALUES(1,?)",new Date().toISOString()).run();
   if(url.pathname==='/api/dashboard'&&request.method==='GET'){
    const [agenda,queued,sent,interested,errors]=await Promise.all([
     statement(env,"SELECT COUNT(*) n FROM contacts WHERE status='AGENDA'").first(),

@@ -1,5 +1,5 @@
 import fs from 'node:fs';import {DatabaseSync} from 'node:sqlite';import assert from 'node:assert/strict';import vm from 'node:vm';import {randomUUID} from 'node:crypto';
-const sqlite=new DatabaseSync(':memory:');for(const file of ['0000_bent_hydra.sql','0001_central_convites.sql','0002_instance_send_rules.sql'])sqlite.exec(fs.readFileSync('drizzle/'+file,'utf8'));
+const sqlite=new DatabaseSync(':memory:');for(const file of JSON.parse(fs.readFileSync('drizzle/meta/_journal.json','utf8')).entries.map(e=>e.tag+'.sql'))sqlite.exec(fs.readFileSync('drizzle/'+file,'utf8'));
 const DB={prepare(sql){const stmt=sqlite.prepare(sql);return{bind(...args){return{async first(){return stmt.get(...args)||null},async all(){return{results:stmt.all(...args)}},async run(){return{meta:stmt.run(...args)}}}}}}};
 const {default:worker}=await import('data:text/javascript;base64,'+Buffer.from(fs.readFileSync('worker/index.js','utf8')).toString('base64'));
 const env={DB,SETTINGS_ENCRYPTION_KEY:'01'.repeat(32)};
@@ -40,3 +40,14 @@ globalThis.fetch=async()=>Response.json({error:'rejected'},{status:500});await c
 assert.equal((await (await call('/api/queue')).json()).entries[0].status,'ERROR');assert.equal((await (await call('/api/send-rules')).json()).rules.queue_state,'PAUSED');
 assert(!(await (await call('/api/history')).json()).entries.some(x=>x.company==='Falha'));globalThis.fetch=originalFetch;
 console.log('Edição, envio, exclusão da agenda ativa, vínculo de cadastro, concorrência e falhas verificados.');
+// Exercise Agenda click handlers as well as the API, without sending any message.
+vm.runInContext("renderAgenda=async()=>{};renderDashboard=async()=>{};showTab=tab=>{globalThis.lastTab=tab}",context);
+let selected=[];context.document.querySelectorAll=()=>selected;
+fields['queue-quantity'].value='1';fields['agenda-city'].value='Teste';fields['agenda-search'].value='';
+await call('/api/contacts/import','POST',{city:'Teste',contacts:[{company:'Botão quantidade',phone:'13977777777'},{company:'Botão seleção',phone:'13966666666'}]});
+await fields['add-queue'].click();assert.equal(context.lastTab,'queue');assert.equal(fields['add-queue'].disabled,false);assert(fields['agenda-status'].textContent.includes('1 contato'));
+const selectable=(await (await call('/api/contacts')).json()).contacts.find(x=>x.status==='AGENDA');selected=[{value:selectable.id}];await fields['add-queue'].click();assert((await (await call('/api/queue')).json()).entries.some(x=>x.contact_id===selectable.id));
+const card=make();fields.agenda.querySelector=()=>card;const oldCreate=context.document.createElement;context.document.createElement=()=>{const el=oldCreate();el.remove=()=>{};el.scrollIntoView=()=>{};return el};
+context.editContact=selectable;vm.runInContext('openAgendaEditor(editContact)',context);const form=fields['agenda-editor'];assert.equal(form.children.length,8);const formInputs=form.children.slice(1,6).map(label=>label.children[0]);assert.equal(formInputs.length,5);formInputs[0].value='Empresa corrigida pelo formulário';formInputs[1].value='13966666666';formInputs[2].value='Cidade editada';formInputs[3].value='Responsável editado';formInputs[4].value='Observações editadas';await form.onsubmit({preventDefault(){}});
+const edited=sqlite.prepare('SELECT * FROM contacts WHERE id=?').get(selectable.id);assert.equal(edited.company,formInputs[0].value);assert.equal(edited.city,formInputs[2].value);assert.equal(edited.responsible,formInputs[3].value);assert.equal(edited.notes,formInputs[4].value);
+console.log('Cliques da Agenda: quantidade, seleção e edição dos cinco campos verificados.');
