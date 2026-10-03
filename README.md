@@ -33,3 +33,10 @@ Use AI_STUDIO_PROMPT.md. A interface e a API são as mesmas do Site; o servidor 
 
 ## Validação
 Banco, criptografia, fluxo entre sessões e histórico verificados com SQLite e resposta Gemini simulada, sem chave real. Execute npm test (Node com node:sqlite). A chamada real depende de uma chave válida e quota disponível. O servidor apresenta erros separados de chave, permissão, API desativada, modelo e quota.
+
+## Fila automática
+Em A enviar, prepare e revise as mensagens antes de iniciar. A fila executa chamadas à Evolution API / Evolution GO, respeitando intervalos e repouso de cada instância. Mantenha o sistema aberto; pode navegar entre abas. A contagem regressiva mostra o próximo envio. Falhas pausam a fila e exigem conferência antes de repetir. Aceitação pela API é registrada como enviada, sem afirmar entrega ou leitura.
+
+O histórico preserva o texto exato e o vínculo com o cadastro, cidade, responsável, observações e instância. Após sucesso, a empresa sai da Agenda ativa e de A enviar; seu cadastro continua no banco. Editar abre formulário completo na página (empresa, WhatsApp, cidade, responsável e observações).
+
+Todas as rotas /api no Node são encaminhadas ao mesmo backend SITE_BACKEND_URL. O backend também precisa executar a versão atual do worker; sincronizar somente o frontend no AI Studio não atualiza o backend publicado.

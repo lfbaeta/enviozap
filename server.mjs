@@ -9,8 +9,7 @@ const server=createServer(async(req,res)=>{
   const request=new Request(new URL(req.url,origin),{method:req.method,headers,...(['GET','HEAD'].includes(req.method)?{}:{body})});
   let response;
   const pathname=new URL(request.url).pathname;
-  const localCentral=pathname.startsWith('/api/contacts')||pathname.startsWith('/api/queue')||pathname==='/api/dashboard'||pathname==='/api/send-rules'||pathname.startsWith('/api/instances');
-  if(pathname.startsWith('/api/')&&!localCentral){
+  if(pathname.startsWith('/api/')){
    const backend=process.env.SITE_BACKEND_URL||'https://mensagem-whatsapp-editavel.lfbaeta132673.chatgpt.site';const target=new URL(req.url,backend);const proxyHeaders=new Headers({'Content-Type':'application/json','Origin':new URL(backend).origin});if(headers.has('X-Gemini-Key'))proxyHeaders.set('X-Gemini-Key',headers.get('X-Gemini-Key'));
    response=await fetch(target,{method:req.method,headers:proxyHeaders,...(['GET','HEAD'].includes(req.method)?{}:{body}),signal:AbortSignal.timeout(45000)});
   }else response=await worker.fetch(request,process.env,{});

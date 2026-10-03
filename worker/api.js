@@ -1,6 +1,6 @@
 function normalizeApiKey(value){return String(value||'').trim().replace(/[\u200B-\u200D\uFEFF]/g,'').replace(/^(?:export\s+)?(?:GEMINI_API_KEY|GOOGLE_API_KEY|API_KEY)\s*=\s*/i,'').replace(/^Bearer\s+/i,'').replace(/[\s\u200B-\u200D\uFEFF]/g,'').replace(/^["'“”‘’`]+|["'“”‘’`;]+$/g,'')}
 const json=(data,status=200)=>Response.json(data,{status,headers:{'Cache-Control':'no-store'}});
-export default {
+const workerApi = {
  async fetch(request,env){
   const url=new URL(request.url);
   if(url.pathname==='/favicon.svg')return new Response(icon,{headers:{'Content-Type':'image/svg+xml'}});
@@ -32,3 +32,5 @@ export default {
   }catch{return json({error:'Não foi possível conectar à IA. Tente novamente.'},502)}
  }
 };
+
+export default workerApi;

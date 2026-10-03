@@ -1,10 +1,10 @@
 import fs from 'node:fs';import {DatabaseSync} from 'node:sqlite';import assert from 'node:assert/strict';import vm from 'node:vm';import {randomUUID} from 'node:crypto';
-const sqlite=new DatabaseSync(':memory:');sqlite.exec(fs.readFileSync('drizzle/0000_bent_hydra.sql','utf8'));
+const sqlite=new DatabaseSync(':memory:');for(const file of ['0000_bent_hydra.sql','0001_central_convites.sql','0002_instance_send_rules.sql'])sqlite.exec(fs.readFileSync('drizzle/'+file,'utf8'));
 const DB={prepare(sql){const stmt=sqlite.prepare(sql);return{bind(...args){return{async first(){return stmt.get(...args)||null},async all(){return{results:stmt.all(...args)}},async run(){return{meta:stmt.run(...args)}}}}}}};
 const {default:worker}=await import('data:text/javascript;base64,'+Buffer.from(fs.readFileSync('worker/index.js','utf8')).toString('base64'));
 const env={DB,SETTINGS_ENCRYPTION_KEY:'01'.repeat(32)};
 async function call(path,method='GET',data){return worker.fetch(new Request('https://example.com'+path,{method,headers:{Origin:'https://example.com'},...(data?{body:JSON.stringify(data)}:{})}),env,{})}
-const config={offer:'Cardápio digital e 30 dias grátis',tone:'Natural',length:'Curta',emojis:true,templates:{initial:'Oi {empresa}',presentation:'Apresentação',promotion:'Promoção',followup:'Retorno',trial:'Teste'}};
+const config={aiEnabled:false,aiInstructions:'',aiRegistration:'',aiHandoff:'',offer:'Cardápio digital e 30 dias grátis',tone:'Natural',length:'Curta',emojis:true,templates:{initial:'Oi {empresa}',presentation:'Apresentação',promotion:'Promoção',followup:'Retorno',trial:'Teste'}};
 assert.equal((await (await call('/api/settings')).json()).config,null);
 let response=await call('/api/settings','PUT',{config,apiKey:'test-only-key'});assert.equal(response.status,200);let settings=await response.json();assert.equal(settings.hasApiKey,true);assert(!JSON.stringify(settings).includes('test-only-key'));assert(!sqlite.prepare('SELECT key_cipher FROM settings').get().key_cipher.includes('test-only-key'));
 await call('/api/settings','PUT',{config:{...config,offer:'Nova oferta'},initializeOnly:true});assert.equal((await (await call('/api/settings')).json()).config.offer,config.offer);
@@ -16,3 +16,27 @@ vm.createContext(context);vm.runInContext(html.match(/<script>([\s\S]*?)<\/scrip
 fields['api-key'].value='replacement-test-key';await fields['save-key'].click();assert.equal(fields['api-key'].value,'');assert(fields['key-saved-status'].textContent.includes('salva'));const unchanged=(await (await call('/api/settings')).json()).config;assert.equal(unchanged.offer,'Oferta em outra máquina');assert.equal(fields['save-key'].disabled,false);
 await call('/api/settings','PUT',{config,removeApiKey:true});assert.equal((await (await call('/api/settings')).json()).hasApiKey,false);
 console.log('Banco compartilhado, criptografia da chave, leitura sem exposição, histórico idempotente e interface verificados.');
+// Queue sends through the provider and preserves the exact accepted message and contact identity.
+response=await call('/api/contacts/import','POST',{city:'Pariquera-Açu',contacts:[{company:'Empresa Teste',phone:'13999999999'}]});assert.equal(response.status,200);
+let contact=(await (await call('/api/contacts')).json()).contacts[0];
+assert.equal((await call('/api/contacts/'+contact.id,'PATCH',{company:'Nome editado',phone:contact.phone,city:contact.city,responsible:'Fernando',notes:'Cadastro completo'})).status,200);
+assert.equal((await (await call('/api/contacts')).json()).contacts[0].company,'Nome editado');
+await call('/api/queue','POST',{contactIds:[contact.id]});
+assert.equal((await call('/api/queue/control','POST',{action:'START'})).status,409);
+await call('/api/queue/prepare','POST',{type:'initial',mode:'STANDARD'});
+const prepared=(await (await call('/api/queue')).json()).entries[0];assert.equal(JSON.parse(prepared.message).text,'Oi Nome editado');
+await call('/api/instances','POST',{name:'Teste',apiUrl:'https://provider.test',token:'mock-token',minSeconds:10,maxSeconds:10,messagesPerCycle:10});
+sqlite.exec("UPDATE instances SET status='CONNECTED'");
+assert.equal((await call('/api/queue/control','POST',{action:'START'})).status,200);
+let sends=0;globalThis.fetch=async(url,options)=>{sends++;assert.equal(url,'https://provider.test/message/sendText/Teste');assert.equal(JSON.parse(options.body).text,JSON.parse(prepared.message).text);return Response.json({key:{id:'provider-confirmed'}})};
+await Promise.all([call('/api/queue/tick','POST',{}),call('/api/queue/tick','POST',{})]);assert.equal(sends,1);
+assert.equal((await (await call('/api/queue')).json()).entries.length,0);
+assert.equal((await (await call('/api/contacts')).json()).contacts.length,0);
+const sent=(await (await call('/api/history')).json()).entries.find(x=>x.id===prepared.id);assert.equal(sent.contactId,contact.id);assert.equal(sent.message,JSON.parse(prepared.message).text);assert.equal(sent.responsible,'Fernando');assert.equal(sent.status,'sent');
+// A failed request stays out of sent history and pauses to prevent automatic duplicates.
+await call('/api/contacts/import','POST',{city:'Teste',contacts:[{company:'Falha',phone:'13988888888'}]});
+contact=(await (await call('/api/contacts')).json()).contacts[0];await call('/api/queue','POST',{contactIds:[contact.id]});await call('/api/queue/prepare','POST',{type:'initial'});sqlite.exec('UPDATE instances SET rest_until=NULL');await call('/api/queue/control','POST',{action:'START'});
+globalThis.fetch=async()=>Response.json({error:'rejected'},{status:500});await call('/api/queue/tick','POST',{});
+assert.equal((await (await call('/api/queue')).json()).entries[0].status,'ERROR');assert.equal((await (await call('/api/send-rules')).json()).rules.queue_state,'PAUSED');
+assert(!(await (await call('/api/history')).json()).entries.some(x=>x.company==='Falha'));globalThis.fetch=originalFetch;
+console.log('Edição, envio, exclusão da agenda ativa, vínculo de cadastro, concorrência e falhas verificados.');
