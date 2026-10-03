@@ -17,8 +17,8 @@ async function providerRequest(instance,env,path,body,timeout=10000){const go=in
 async function webhookAddress(instance,env,origin){let token;if(instance.webhook_token_cipher)token=await decryptSecret(instance.webhook_token_cipher,env);else{token=Array.from(crypto.getRandomValues(new Uint8Array(32)),b=>b.toString(16).padStart(2,'0')).join('');await statement(env,'UPDATE instances SET webhook_token_cipher=? WHERE id=?',await encryptSecret(token,env),instance.id).run()}return origin+'/api/webhooks/'+encodeURIComponent(instance.id)+'/'+token}
 async function configureBotWebhook(instance,env,origin){
  const address=await webhookAddress(instance,env,origin);let result;
- if(instance.provider==='EVOLUTION_GO')result=await providerRequest(instance,env,'/instance/connect',{webhookUrl:address,subscribe:['MESSAGE']});
- else result=await providerRequest(instance,env,'/webhook/set/'+encodeURIComponent(instance.name),{webhook:{enabled:true,url:address,byEvents:false,base64:false,events:['MESSAGES_UPSERT']}});
+ if(instance.provider==='EVOLUTION_GO')result=await providerRequest(instance,env,'/instance/connect',{webhookUrl:address,subscribe:['MESSAGE','CONNECTION']});
+ else result=await providerRequest(instance,env,'/webhook/set/'+encodeURIComponent(instance.name),{webhook:{enabled:true,url:address,byEvents:false,base64:false,events:['MESSAGES_UPSERT','CONNECTION_UPDATE']}});
  await statement(env,'UPDATE instances SET webhook_status=? WHERE id=?',result.ok?'READY':'ERROR',instance.id).run();return result.ok;
 }
 function incomingMessage(payload){
@@ -40,8 +40,9 @@ async function handleBot(request,env,url,ctx){
   const parts=url.pathname.split('/');if(parts.length!==5)return json({error:'Webhook inválido.'},401);
   const instance=await statement(env,'SELECT * FROM instances WHERE id=?',decodeURIComponent(parts[3])).first();
   if(!instance?.webhook_token_cipher||await decryptSecret(instance.webhook_token_cipher,env)!==parts[4])return json({error:'Webhook não autorizado.'},401);
-  const config=await ensureBotConfig(env);if(!config.aiEnabled)return json({ignored:true});
-  let payload;try{payload=await requestData(request,75000)}catch{return json({error:'Evento inválido.'},400)}const incoming=incomingMessage(payload);if(!incoming)return json({ignored:true});
+  let payload;try{payload=await requestData(request,75000)}catch{return json({error:'Evento inválido.'},400)}
+  const connection=connectionEvent(payload);if(connection){await statement(env,'UPDATE instances SET status=?,last_checked_at=? WHERE id=?',connection,new Date().toISOString(),instance.id).run();return json({updated:true})}
+  const config=await ensureBotConfig(env);if(!config.aiEnabled)return json({ignored:true});const incoming=incomingMessage(payload);if(!incoming)return json({ignored:true});
   let contact=await statement(env,'SELECT * FROM contacts WHERE phone=?',incoming.phone).first();
   if(!contact){const id=crypto.randomUUID();await statement(env,"INSERT OR IGNORE INTO contacts(id,company,phone,city,status,created_at) VALUES(?,?,?,'Não informada','AGENDA',?)",id,incoming.name||incoming.phone,incoming.phone,new Date().toISOString()).run();contact=await statement(env,'SELECT * FROM contacts WHERE phone=?',incoming.phone).first()}
   if(contact.ai_paused)return json({ignored:true});
@@ -52,7 +53,7 @@ async function handleBot(request,env,url,ctx){
  const botRoute=url.pathname==='/api/ai/status'||url.pathname==='/api/ai/setup'||/^\/api\/contacts\/[^/]+\/ai$/.test(url.pathname)||/^\/api\/instances\/[^/]+\/bot$/.test(url.pathname);
  if(!botRoute)return null;
  if(request.method!=='GET'&&request.headers.get('Origin')!==url.origin)return json({error:'Origem não autorizada.'},403);
- if(url.pathname==='/api/ai/status'&&request.method==='GET'){const config=await ensureBotConfig(env),instances=(await statement(env,'SELECT id,name,webhook_status AS webhookStatus FROM instances').all()).results||[],errors=(await statement(env,"SELECT m.error,c.company,m.created_at AS date FROM ai_messages m JOIN contacts c ON c.id=m.contact_id WHERE m.status='ERROR' ORDER BY m.created_at DESC LIMIT 5").all()).results||[];return json({enabled:config.aiEnabled,hasApiKey:!!await configuredApiKey(env),instances,errors})}
+ if(url.pathname==='/api/ai/status'&&request.method==='GET'){const config=await ensureBotConfig(env),instances=(await statement(env,'SELECT id,name,status,last_checked_at AS lastCheckedAt,webhook_status AS webhookStatus FROM instances').all()).results||[],errors=(await statement(env,"SELECT m.error,c.company,m.created_at AS date FROM ai_messages m JOIN contacts c ON c.id=m.contact_id WHERE m.status='ERROR' ORDER BY m.created_at DESC LIMIT 5").all()).results||[];return json({enabled:config.aiEnabled,hasApiKey:!!await configuredApiKey(env),instances,errors})}
  if(url.pathname==='/api/ai/setup'&&request.method==='POST'){const config=await ensureBotConfig(env);config.aiEnabled=true;await statement(env,'UPDATE settings SET config_json=?,updated_at=? WHERE id=1',JSON.stringify(config),new Date().toISOString()).run();const instances=(await statement(env,'SELECT * FROM instances').all()).results||[];let connected=0;for(const i of instances){try{if(await configureBotWebhook(i,env,url.origin))connected++}catch{await statement(env,"UPDATE instances SET webhook_status='ERROR' WHERE id=?",i.id).run()}}return json({success:true,configured:connected,total:instances.length,hasApiKey:!!await configuredApiKey(env)})}
  if(/^\/api\/instances\/[^/]+\/bot$/.test(url.pathname)&&request.method==='POST'){const row=await statement(env,'SELECT * FROM instances WHERE id=?',decodeURIComponent(url.pathname.split('/')[3])).first();if(!row)return json({error:'Instância não encontrada.'},404);try{return await configureBotWebhook(row,env,url.origin)?json({success:true}):json({error:'A integração recusou ativar o recebimento de mensagens. Confira a instância.'},502)}catch{return json({error:'Não foi possível configurar o recebimento nesta instância.'},502)}}
  if(/^\/api\/contacts\/[^/]+\/ai$/.test(url.pathname)&&request.method==='PATCH'){const d=await requestData(request,1000);await statement(env,'UPDATE contacts SET ai_paused=? WHERE id=?',d.paused===true?1:0,decodeURIComponent(url.pathname.split('/')[3])).run();return json({success:true})}
