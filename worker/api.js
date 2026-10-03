@@ -1,10 +1,11 @@
 function normalizeApiKey(value){return String(value||'').trim().replace(/[\u200B-\u200D\uFEFF]/g,'').replace(/^(?:export\s+)?(?:GEMINI_API_KEY|GOOGLE_API_KEY|API_KEY)\s*=\s*/i,'').replace(/^Bearer\s+/i,'').replace(/[\s\u200B-\u200D\uFEFF]/g,'').replace(/^["'“”‘’`]+|["'“”‘’`;]+$/g,'')}
 const json=(data,status=200)=>Response.json(data,{status,headers:{'Cache-Control':'no-store'}});
 const workerApi = {
- async fetch(request,env){
+ async fetch(request,env,ctx={}){
   const url=new URL(request.url);
   if(url.pathname==='/favicon.svg')return new Response(icon,{headers:{'Content-Type':'image/svg+xml'}});
-  if(url.pathname==='/')return new Response(page,{headers:{'Content-Type':'text/html; charset=utf-8'}});
+  if(url.pathname==='/')return new Response(page,{headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store'}});
+  try{const bot=await handleBot(request,env,url,ctx);if(bot)return bot}catch{return json({error:'Não foi possível processar o atendimento da IA.'},503)}
   const storage=await handleStorage(request,env,url);if(storage)return storage;
   if(url.pathname!=='/api/generate-message')return new Response('Not found',{status:404});
   if(request.method!=='POST')return json({error:'Método não permitido.'},405);
