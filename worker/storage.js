@@ -47,6 +47,11 @@ async function handleStorage(request,env,url){
    const id=decodeURIComponent(url.pathname.split('/')[3]);const r=await statement(env,"UPDATE contacts SET status='AGENDA' WHERE id=?",id).run();if(r.meta?.changes)await event(env,id,'RETURNED_TO_AGENDA');return r.meta?.changes?json({success:true}):json({error:'Contato não encontrado.'},404)
   }
   if(url.pathname==='/api/queue'&&request.method==='GET'){const r=await statement(env,"SELECT q.*,c.company,c.phone,c.city,c.interested FROM send_queue q JOIN contacts c ON c.id=q.contact_id WHERE q.status IN ('QUEUED','PROCESSING','ERROR') ORDER BY q.position,q.created_at").all();return json({entries:r.results||[]})}
+  if(url.pathname==='/api/queue'&&request.method==='DELETE'){
+   const rows=(await statement(env,"SELECT id,contact_id FROM send_queue WHERE status IN ('QUEUED','ERROR')").all()).results||[];
+   for(const row of rows){await statement(env,'DELETE FROM send_queue WHERE id=?',row.id).run();await statement(env,"UPDATE contacts SET status='AGENDA' WHERE id=?",row.contact_id).run();await event(env,row.contact_id,'QUEUE_CLEARED')}
+   return json({success:true,cleared:rows.length})
+  }
   if(url.pathname==='/api/queue'&&request.method==='POST'){
    const data=await requestData(request,10000),limit=Math.max(1,Math.min(500,Number(data.quantity)||1)),city=cleanText(data.city,120),q=cleanText(data.q,150);let sql="SELECT id,last_sent_at FROM contacts WHERE status='AGENDA'",args=[];if(city){sql+=' AND city=?';args.push(city)}if(q){sql+=' AND (company LIKE ? OR phone LIKE ? OR city LIKE ?)';args.push('%'+q+'%','%'+q+'%','%'+q+'%')}sql+=' ORDER BY company COLLATE NOCASE LIMIT ?';args.push(limit);const contacts=(await statement(env,sql,...args).all()).results||[];let added=0;const pos=await statement(env,'SELECT COALESCE(MAX(position),0) n FROM send_queue').first();let position=Number(pos?.n||0);for(const c of contacts){if(c.last_sent_at&&!data.allowResend)continue;const id=crypto.randomUUID();try{await statement(env,"INSERT INTO send_queue(id,contact_id,status,position,created_at) VALUES(?,?,'QUEUED',?,?)",id,c.id,++position,new Date().toISOString()).run();await statement(env,"UPDATE contacts SET status='QUEUED' WHERE id=?",c.id).run();await event(env,c.id,'QUEUED');added++}catch{}}return json({success:true,added})
   }
