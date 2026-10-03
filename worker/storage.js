@@ -39,6 +39,7 @@ async function handleStorage(request,env,url){
   }
   if(url.pathname.match(/^\/api\/contacts\/[^/]+$/)&&request.method==='PATCH'){
    const id=decodeURIComponent(url.pathname.split('/').pop()),data=await requestData(request,10000);const company=cleanText(data.company,150),phone=cleanPhone(data.phone),city=cleanText(data.city,120);if(!company||!city||!/^[0-9]{10,15}$/.test(phone))return json({error:'Confira estabelecimento, WhatsApp e cidade.'},400);
+   const existing=await statement(env,'SELECT id FROM contacts WHERE phone=? AND id<>?',phone,id).first();if(existing)return json({error:'Este WhatsApp já está cadastrado em outro estabelecimento. Confira o número.'},409);
    const r=await statement(env,'UPDATE contacts SET company=?,responsible=?,phone=?,city=?,notes=? WHERE id=?',company,cleanText(data.responsible,150),phone,city,cleanText(data.notes,1000),id).run();if(r.meta?.changes)await event(env,id,'EDITED');return r.meta?.changes?json({success:true}):json({error:'Contato não encontrado.'},404)
   }
   if(url.pathname.match(/^\/api\/contacts\/[^/]+\/interest$/)&&request.method==='PATCH'){
