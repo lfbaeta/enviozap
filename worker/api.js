@@ -2,6 +2,14 @@ function normalizeApiKey(value){return String(value||'').trim().replace(/[\u200B
 const json=(data,status=200)=>Response.json(data,{status,headers:{'Cache-Control':'no-store'}});
 const workerApi = {
  async fetch(request,env,ctx={}){
+  const url=new URL(request.url),origin=request.headers.get('Origin'),cross=origin&&origin!==url.origin&&url.pathname.startsWith('/api/');
+  let allowed=false;try{const host=new URL(origin).hostname;allowed=host==='aistudio.google.com'||host==='localhost'||host==='127.0.0.1'||host.endsWith('.run.app')||host.endsWith('.usercontent.goog')||host.endsWith('.googleusercontent.com')}catch{}
+  if(request.method==='OPTIONS'&&cross){if(!allowed)return json({error:'Origem não autorizada.'},403);return new Response(null,{status:204,headers:{'Access-Control-Allow-Origin':origin,'Access-Control-Allow-Methods':'GET,POST,PUT,PATCH,DELETE,OPTIONS','Access-Control-Allow-Headers':'Content-Type,X-Gemini-Key','Access-Control-Max-Age':'600','Vary':'Origin'}})}
+  if(cross&&allowed){const headers=new Headers(request.headers);headers.set('Origin',url.origin);request=new Request(request,{headers})}
+  const response=await workerApi.handleRequest(request,env,ctx);
+  if(cross&&allowed){const headers=new Headers(response.headers);headers.set('Access-Control-Allow-Origin',origin);headers.set('Vary','Origin');return new Response(response.body,{status:response.status,headers})}return response;
+ },
+ async handleRequest(request,env,ctx={}){
   const url=new URL(request.url);
   if(url.pathname==='/favicon.svg')return new Response(icon,{headers:{'Content-Type':'image/svg+xml'}});
   if(url.pathname==='/')return new Response(page,{headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store'}});
