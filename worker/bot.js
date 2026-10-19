@@ -22,17 +22,23 @@ async function configureBotWebhook(instance,env,origin){
  await statement(env,'UPDATE instances SET webhook_status=? WHERE id=?',result.ok?'READY':'ERROR',instance.id).run();return result.ok;
 }
 function incomingMessage(payload){
- const event=String(payload.event||payload.type||'').toLowerCase().replace(/[_ .-]/g,'');if(!['message','messagesupsert'].includes(event))return null;
- const d=payload.data||payload,info=d.Info||d.info||{},key=d.key||{},source=info.MessageSource||info;
- if(key.fromMe===true||source.IsFromMe===true||source.isFromMe===true||d.fromMe===true)return null;
+ const event=String(payload.event||payload.type||'').toLowerCase().replace(/[_ .-]/g,'');
+ if(!['message','messagesupsert'].includes(event))return null;
+ const d=payload.data||payload,info=d.Info||d.info||{},key=d.key||d.Key||{},source=info.MessageSource||info;
+ if(key.fromMe===true||key.fromMe==='true'||source.IsFromMe===true||source.isFromMe===true||d.fromMe===true)return null;
  if(d.type&&d.type!=='notify')return null;
- const jid=key.remoteJid||source.Chat||source.chat||d.remoteJid||d.sender||'';
- if(!/@s\.whatsapp\.net$/.test(jid))return null;
- const message=d.message||d.Message||{};const text=message.conversation||message.extendedTextMessage?.text||message.ephemeralMessage?.message?.conversation||message.ephemeralMessage?.message?.extendedTextMessage?.text||d.text;
+ const jid=key.remoteJid||key.remoteJidAlt||source.Chat||source.chat||d.remoteJid||d.sender||'';
+ // Groups, broadcasts and unsupported identifiers must never receive an automated reply.
+ if(!/^\\d+@s\\.whatsapp\\.net$/.test(String(jid)))return null;
+ const message=d.message||d.Message||{};
+ const inner=message.ephemeralMessage?.message||message.viewOnceMessage?.message||message;
+ const text=inner.conversation||inner.extendedTextMessage?.text||d.text;
  const id=key.id||info.ID||info.id||d.id;
  if(!id||typeof text!=='string'||!text.trim())return null;
- const timestamp=d.messageTimestamp||info.Timestamp;const time=typeof timestamp==='number'?timestamp*1000:Date.parse(timestamp);if(Number.isFinite(time)&&Date.now()-time>600000)return null;
- return {id:String(id).slice(0,180),phone:jid.split('@')[0],text:text.trim().slice(0,5000),name:cleanText(d.pushName||info.PushName||'',150)};
+ const timestamp=d.messageTimestamp||info.Timestamp;
+ const time=typeof timestamp==='number'?timestamp*1000:Date.parse(timestamp);
+ if(Number.isFinite(time)&&Date.now()-time>600000)return null;
+ return {id:String(id).slice(0,180),phone:String(jid).split('@')[0],text:text.trim().slice(0,5000),name:cleanText(d.pushName||info.PushName||'',150)};
 }
 async function handleBot(request,env,url,ctx){
  if(url.pathname.startsWith('/api/webhooks/')){
@@ -53,7 +59,7 @@ async function handleBot(request,env,url,ctx){
  const botRoute=url.pathname==='/api/ai/status'||url.pathname==='/api/ai/setup'||/^\/api\/contacts\/[^/]+\/ai$/.test(url.pathname)||/^\/api\/instances\/[^/]+\/bot$/.test(url.pathname);
  if(!botRoute)return null;
  if(request.method!=='GET'&&request.headers.get('Origin')!==url.origin)return json({error:'Origem não autorizada.'},403);
- if(url.pathname==='/api/ai/status'&&request.method==='GET'){const config=await ensureBotConfig(env),instances=(await statement(env,'SELECT id,name,status,last_checked_at AS lastCheckedAt,webhook_status AS webhookStatus FROM instances').all()).results||[],errors=(await statement(env,"SELECT m.error,c.company,m.created_at AS date FROM ai_messages m JOIN contacts c ON c.id=m.contact_id WHERE m.status='ERROR' ORDER BY m.created_at DESC LIMIT 5").all()).results||[];return json({enabled:config.aiEnabled,hasApiKey:!!await configuredApiKey(env),instances,errors})}
+ if(url.pathname==='/api/ai/status'&&request.method==='GET'){const config=await ensureBotConfig(env),instances=(await statement(env,'SELECT id,name,status,last_checked_at AS lastCheckedAt,webhook_status AS webhookStatus FROM instances').all()).results||[],errors=(await statement(env,"SELECT m.error,c.company,m.created_at AS date FROM ai_messages m JOIN contacts c ON c.id=m.contact_id WHERE m.status='ERROR' ORDER BY m.created_at DESC LIMIT 5").all()).results||[];return json({enabled:config.aiEnabled,hasApiKey:!!await configuredApiKey(env),instances,errors,diagnostics:{webhookReady:instances.filter(i=>i.webhookStatus==='READY').length,connected:instances.filter(i=>i.status==='CONNECTED').length}})}
  if(url.pathname==='/api/ai/setup'&&request.method==='POST'){const config=await ensureBotConfig(env);config.aiEnabled=true;await statement(env,'UPDATE settings SET config_json=?,updated_at=? WHERE id=1',JSON.stringify(config),new Date().toISOString()).run();const instances=(await statement(env,'SELECT * FROM instances').all()).results||[];let connected=0;for(const i of instances){try{if(await configureBotWebhook(i,env,url.origin))connected++}catch{await statement(env,"UPDATE instances SET webhook_status='ERROR' WHERE id=?",i.id).run()}}return json({success:true,configured:connected,total:instances.length,hasApiKey:!!await configuredApiKey(env)})}
  if(/^\/api\/instances\/[^/]+\/bot$/.test(url.pathname)&&request.method==='POST'){const row=await statement(env,'SELECT * FROM instances WHERE id=?',decodeURIComponent(url.pathname.split('/')[3])).first();if(!row)return json({error:'Instância não encontrada.'},404);try{return await configureBotWebhook(row,env,url.origin)?json({success:true}):json({error:'A integração recusou ativar o recebimento de mensagens. Confira a instância.'},502)}catch{return json({error:'Não foi possível configurar o recebimento nesta instância.'},502)}}
  if(/^\/api\/contacts\/[^/]+\/ai$/.test(url.pathname)&&request.method==='PATCH'){const d=await requestData(request,1000);await statement(env,'UPDATE contacts SET ai_paused=? WHERE id=?',d.paused===true?1:0,decodeURIComponent(url.pathname.split('/')[3])).run();return json({success:true})}
