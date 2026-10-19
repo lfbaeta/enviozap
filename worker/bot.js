@@ -14,7 +14,12 @@ async function ensureBotConfig(env){
 }
 function botDelay(config){return (config.aiRandomDelay?config.aiMinSeconds+Math.floor(Math.random()*(config.aiMaxSeconds-config.aiMinSeconds+1)):config.aiDelaySeconds)*1000}
 async function providerRequest(instance,env,path,body,timeout=10000){const go=instance.provider==='EVOLUTION_GO',key=await decryptSecret(go?instance.instance_token_cipher:instance.token_cipher,env);const response=await fetch(instance.api_url.replace(/\/$/,'')+path,{method:'POST',headers:{'Content-Type':'application/json',apikey:key},body:JSON.stringify(body),signal:AbortSignal.timeout(timeout)});let data={};try{data=await response.json()}catch{}return {ok:response.ok&&!data.error&&data.success!==false,status:response.status,data}}
-async function webhookAddress(instance,env,origin){let token;if(instance.webhook_token_cipher)token=await decryptSecret(instance.webhook_token_cipher,env);else{token=Array.from(crypto.getRandomValues(new Uint8Array(32)),b=>b.toString(16).padStart(2,'0')).join('');await statement(env,'UPDATE instances SET webhook_token_cipher=? WHERE id=?',await encryptSecret(token,env),instance.id).run()}return origin+'/api/webhooks/'+encodeURIComponent(instance.id)+'/'+token}
+async function webhookAddress(instance,env,origin){
+ // Always register callbacks against the public backend, never an AI Studio preview URL.
+ const publicOrigin=String(env.PUBLIC_WEBHOOK_ORIGIN||origin).replace(/\/$/,'');
+ if(!/^https:\/\/[^/]+$/i.test(publicOrigin))throw new Error('Configure PUBLIC_WEBHOOK_ORIGIN com a URL HTTPS pública do backend.');
+ origin=publicOrigin;
+ let token;if(instance.webhook_token_cipher)token=await decryptSecret(instance.webhook_token_cipher,env);else{token=Array.from(crypto.getRandomValues(new Uint8Array(32)),b=>b.toString(16).padStart(2,'0')).join('');await statement(env,'UPDATE instances SET webhook_token_cipher=? WHERE id=?',await encryptSecret(token,env),instance.id).run()}return origin+'/api/webhooks/'+encodeURIComponent(instance.id)+'/'+token}
 async function configureBotWebhook(instance,env,origin){
  const address=await webhookAddress(instance,env,origin);let result;
  if(instance.provider==='EVOLUTION_GO')result=await providerRequest(instance,env,'/instance/connect',{webhookUrl:address,subscribe:['MESSAGE','CONNECTION']});
