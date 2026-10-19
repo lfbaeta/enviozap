@@ -29,7 +29,7 @@ function incomingMessage(payload){
  if(d.type&&d.type!=='notify')return null;
  const jid=key.remoteJid||key.remoteJidAlt||source.Chat||source.chat||d.remoteJid||d.sender||'';
  // Groups, broadcasts and unsupported identifiers must never receive an automated reply.
- if(!/^\\d+@s\\.whatsapp\\.net$/.test(String(jid)))return null;
+ if(!/^\d+@s\.whatsapp\.net$/.test(String(jid)))return null;
  const message=d.message||d.Message||{};
  const inner=message.ephemeralMessage?.message||message.viewOnceMessage?.message||message;
  const text=inner.conversation||inner.extendedTextMessage?.text||d.text;
