@@ -83,6 +83,10 @@ async function respondToCustomer(env,instance,contact,incoming){
   // Recheck immediately before sending: a newer customer message supersedes this reply.
   const newerBeforeSend=await statement(env,"SELECT id FROM ai_messages WHERE instance_id=? AND contact_id=? AND created_at>? AND id<>? LIMIT 1",instance.id,contact.id,new Date(started).toISOString(),incoming.jobId).first();
   if(newerBeforeSend){await statement(env,"UPDATE ai_messages SET status='SUPERSEDED' WHERE id=?",incoming.jobId).run();return}
+  // Atomic per-conversation send gate: prevent parallel webhook jobs from sending two greetings.
+  // A recent reply suppresses duplicate automation responses, including distinct provider IDs.
+  const sendClaim=await statement(env,"UPDATE ai_messages SET status='SENDING' WHERE id=? AND status='PROCESSING' AND NOT EXISTS (SELECT 1 FROM ai_messages WHERE instance_id=? AND contact_id=? AND id<>? AND (status='SENDING' OR (status='SENT' AND sent_at>=?)))",incoming.jobId,instance.id,contact.id,incoming.jobId,new Date(Date.now()-45000).toISOString()).run();
+  if(!sendClaim.meta?.changes){await statement(env,"UPDATE ai_messages SET status='SUPERSEDED' WHERE id=? AND status='PROCESSING'",incoming.jobId).run();return}
   const result=await providerRequest(instance,env,go?'/send/text':'/message/sendText/'+encodeURIComponent(instance.name),{number:incoming.phone,text:reply},8000);if(!result.ok)throw new Error('A integração recusou a resposta (HTTP '+result.status+').');accepted=true;
   const now=new Date().toISOString();await statement(env,"UPDATE ai_messages SET status='SENT',sent_at=? WHERE id=?",now,incoming.jobId).run();
   await statement(env,"INSERT OR IGNORE INTO sends(id,company,phone,message,type,opened_at,status,confirmed_at) VALUES(?,?,?,?,?,?,'sent',?)",incoming.jobId,contact.company,incoming.phone,reply,'Atendimento IA',now,now).run();
