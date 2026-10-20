@@ -65,6 +65,10 @@ async function respondToCustomer(env,instance,contact,incoming){
   let config=await ensureBotConfig(env);if(!config.aiEnabled)return;
   if(/(pare de|nao me|não me|não quero|nao quero).{0,30}(mensage|contato|receber)|remova meu|remover meu/.test(incoming.text.toLowerCase())){await statement(env,'UPDATE contacts SET ai_paused=1 WHERE id=?',contact.id).run();await statement(env,"UPDATE ai_messages SET status='PAUSED' WHERE id=?",incoming.jobId).run();return}
   const claim=await statement(env,"UPDATE ai_messages SET status='PROCESSING' WHERE id=? AND status='RECEIVED'",incoming.jobId).run();if(!claim.meta?.changes)return;
+  // Reserve only the newest pending message for this conversation.
+  // Earlier messages are kept for context, but must not trigger extra replies.
+  const newer=await statement(env,"SELECT id FROM ai_messages WHERE instance_id=? AND contact_id=? AND created_at>=? AND id<>? AND status IN ('RECEIVED','PROCESSING','SENT') ORDER BY created_at DESC LIMIT 1",instance.id,contact.id,new Date(started).toISOString(),incoming.jobId).first();
+  if(newer){await statement(env,"UPDATE ai_messages SET status='SUPERSEDED' WHERE id=?",incoming.jobId).run();return}
   const delay=botDelay(config),go=instance.provider==='EVOLUTION_GO';
   if(config.aiTyping)try{await providerRequest(instance,env,go?'/message/presence':'/chat/sendPresence/'+encodeURIComponent(instance.name),go?{number:incoming.phone,state:'composing',isAudio:false}:{number:incoming.phone,presence:'composing',delay},1500)}catch{}
   const history=(await statement(env,"SELECT incoming,reply FROM ai_messages WHERE contact_id=? AND status='SENT' ORDER BY created_at DESC LIMIT 8",contact.id).all()).results||[];
@@ -76,6 +80,9 @@ async function respondToCustomer(env,instance,contact,incoming){
   await statement(env,'UPDATE ai_messages SET reply=? WHERE id=?',reply,incoming.jobId).run();
   const remaining=delay-(Date.now()-started);if(remaining>0)await new Promise(r=>setTimeout(r,remaining));
   config=await ensureBotConfig(env);const latest=await statement(env,'SELECT ai_paused FROM contacts WHERE id=?',contact.id).first();if(!config.aiEnabled||latest?.ai_paused){await statement(env,"UPDATE ai_messages SET status='PAUSED' WHERE id=?",incoming.jobId).run();return}
+  // Recheck immediately before sending: a newer customer message supersedes this reply.
+  const newerBeforeSend=await statement(env,"SELECT id FROM ai_messages WHERE instance_id=? AND contact_id=? AND created_at>? AND id<>? LIMIT 1",instance.id,contact.id,new Date(started).toISOString(),incoming.jobId).first();
+  if(newerBeforeSend){await statement(env,"UPDATE ai_messages SET status='SUPERSEDED' WHERE id=?",incoming.jobId).run();return}
   const result=await providerRequest(instance,env,go?'/send/text':'/message/sendText/'+encodeURIComponent(instance.name),{number:incoming.phone,text:reply},8000);if(!result.ok)throw new Error('A integração recusou a resposta (HTTP '+result.status+').');accepted=true;
   const now=new Date().toISOString();await statement(env,"UPDATE ai_messages SET status='SENT',sent_at=? WHERE id=?",now,incoming.jobId).run();
   await statement(env,"INSERT OR IGNORE INTO sends(id,company,phone,message,type,opened_at,status,confirmed_at) VALUES(?,?,?,?,?,?,'sent',?)",incoming.jobId,contact.company,incoming.phone,reply,'Atendimento IA',now,now).run();
